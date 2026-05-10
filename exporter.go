@@ -42,7 +42,6 @@ type exporter struct {
 	exporter                     map[string]Exporter
 	overviewExporter             *exporterOverview
 	lastScrapeOK                 bool
-	lastScrapeStartedAt          time.Time
 }
 
 // Exporter interface for prometheus metrics. Collect is fetching the data and therefore can return an error
@@ -92,76 +91,43 @@ func (e *exporter) Collect(ch chan<- prometheus.Metric) {
 	e.mutex.Lock() // To protect metrics from concurrent collects.
 	defer e.mutex.Unlock()
 
-	if e.useCachedMetrics() {
-		e.collectFreshMetrics(ch, false)
-		return
-	}
-
-	scrapeStartedAt := time.Now()
-	e.collectFreshMetrics(ch, true)
-	e.lastScrapeStartedAt = scrapeStartedAt
-
-}
-
-func (e *exporter) useCachedMetrics() bool {
-	return config.ScrapeInterval > 0 && !e.lastScrapeStartedAt.IsZero() && time.Since(e.lastScrapeStartedAt) < time.Duration(config.ScrapeInterval)*time.Second
-}
-
-func (e *exporter) collectFreshMetrics(ch chan<- prometheus.Metric, scrapeRabbitMQ bool) {
-
 	start := time.Now()
-	cacheAge := time.Duration(0)
-	if !e.lastScrapeStartedAt.IsZero() {
-		cacheAge = time.Since(e.lastScrapeStartedAt)
+
+	e.upMetric.Reset()
+	e.endpointUpMetric.Reset()
+	e.endpointScrapeDurationMetric.Reset()
+	log.WithField("scrape_interval", time.Duration(config.ScrapeInterval)*time.Second).Info("Refreshing RabbitMQ metrics")
+
+	allUp := true
+
+	if err := e.collectWithDuration(e.overviewExporter, "overview", ch); err != nil {
+		log.WithError(err).Warn("retrieving overview failed")
+		allUp = false
 	}
 
-	if scrapeRabbitMQ {
-		e.upMetric.Reset()
-		e.endpointUpMetric.Reset()
-		e.endpointScrapeDurationMetric.Reset()
-		log.WithField("scrape_interval", time.Duration(config.ScrapeInterval)*time.Second).Info("Refreshing RabbitMQ metrics")
-	}
-
-	if scrapeRabbitMQ {
-		allUp := true
-
-		if err := e.collectWithDuration(e.overviewExporter, "overview", ch); err != nil {
-			log.WithError(err).Warn("retrieving overview failed")
+	for name, ex := range e.exporter {
+		if err := e.collectWithDuration(ex, name, ch); err != nil {
+			log.WithError(err).Warn("retrieving " + name + " failed")
 			allUp = false
 		}
+	}
 
-		for name, ex := range e.exporter {
-			if err := e.collectWithDuration(ex, name, ch); err != nil {
-				log.WithError(err).Warn("retrieving " + name + " failed")
-				allUp = false
-			}
-		}
+	if allUp {
+		e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(1)
+	} else {
+		e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(0)
+	}
+	e.lastScrapeOK = allUp
 
-		if allUp {
-			e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(1)
-		} else {
-			e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(0)
-		}
-		e.lastScrapeOK = allUp
-
-		if e.overviewExporter.NodeInfo().ClusterName != "" && e.overviewExporter.NodeInfo().Node != "" {
-			e.upMetric.DeleteLabelValues("", "")
-		}
+	if e.overviewExporter.NodeInfo().ClusterName != "" && e.overviewExporter.NodeInfo().Node != "" {
+		e.upMetric.DeleteLabelValues("", "")
 	}
 	BuildInfo.Collect(ch)
 
 	e.upMetric.Collect(ch)
 	e.endpointUpMetric.Collect(ch)
 	e.endpointScrapeDurationMetric.Collect(ch)
-	if scrapeRabbitMQ {
-		log.WithField("duration", time.Since(start)).Info("RabbitMQ metrics refreshed")
-	} else {
-		log.WithFields(log.Fields{
-			"cache_age":       cacheAge,
-			"duration":        time.Since(start),
-			"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
-		}).Info("Metrics served from cache")
-	}
+	log.WithField("duration", time.Since(start)).Info("RabbitMQ metrics refreshed")
 
 }
 

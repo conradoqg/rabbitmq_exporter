@@ -93,10 +93,11 @@ func TestScrapeIntervalCachesMetrics(t *testing.T) {
 	prometheus.MustRegister(exporter)
 	defer prometheus.Unregister(exporter)
 
+	handler := newMetricsCacheHandler(promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{DisableCompression: true}))
 	for i := 0; i < 2; i++ {
-		req, _ := http.NewRequest("GET", "", nil)
+		req, _ := http.NewRequest("GET", "/metrics", nil)
 		w := httptest.NewRecorder()
-		promhttp.Handler().ServeHTTP(w, req)
+		handler.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Errorf("Metrics endpoint didn't return %v", http.StatusOK)
 		}
@@ -108,19 +109,21 @@ func TestScrapeIntervalCachesMetrics(t *testing.T) {
 	}
 }
 
-func TestScrapeIntervalStartsWhenScrapeStarts(t *testing.T) {
+func TestMetricsCacheIntervalStartsWhenScrapeStarts(t *testing.T) {
 	initConfig()
 	config.ScrapeInterval = 30
 
-	exporter := newExporter()
-	exporter.lastScrapeStartedAt = time.Now().Add(-29 * time.Second)
+	handler := &metricsCacheHandler{
+		lastScrapeStarted: time.Now().Add(-29 * time.Second),
+		cachedBody:        []byte("cached metrics"),
+	}
 
-	if !exporter.useCachedMetrics() {
+	if !handler.useCache() {
 		t.Error("expected cache to be used before scrape interval elapsed from scrape start")
 	}
 
-	exporter.lastScrapeStartedAt = time.Now().Add(-31 * time.Second)
-	if exporter.useCachedMetrics() {
+	handler.lastScrapeStarted = time.Now().Add(-31 * time.Second)
+	if handler.useCache() {
 		t.Error("expected cache to expire after scrape interval elapsed from scrape start")
 	}
 }

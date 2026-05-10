@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -18,6 +19,97 @@ import (
 const (
 	defaultLogLevel = log.InfoLevel
 )
+
+type metricsCacheHandler struct {
+	mutex             sync.Mutex
+	handler           http.Handler
+	lastScrapeStarted time.Time
+	cachedStatus      int
+	cachedHeader      http.Header
+	cachedBody        []byte
+}
+
+type captureResponseWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func newMetricsCacheHandler(handler http.Handler) *metricsCacheHandler {
+	return &metricsCacheHandler{handler: handler}
+}
+
+func (w *captureResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *captureResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *captureResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func (h *metricsCacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.WithFields(log.Fields{
+		"remote_addr": r.RemoteAddr,
+		"method":      r.Method,
+		"user_agent":  r.UserAgent(),
+	}).Info("Metrics endpoint requested")
+
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	if h.useCache() {
+		h.writeCached(w)
+		return
+	}
+
+	started := time.Now()
+	capture := &captureResponseWriter{header: make(http.Header)}
+	h.handler.ServeHTTP(capture, r)
+	if capture.status == 0 {
+		capture.status = http.StatusOK
+	}
+
+	h.cachedStatus = capture.status
+	h.cachedHeader = capture.header.Clone()
+	h.cachedBody = append(h.cachedBody[:0], capture.body.Bytes()...)
+	h.lastScrapeStarted = started
+
+	copyHeader(w.Header(), h.cachedHeader)
+	w.WriteHeader(h.cachedStatus)
+	_, _ = w.Write(h.cachedBody)
+}
+
+func (h *metricsCacheHandler) useCache() bool {
+	return config.ScrapeInterval > 0 && len(h.cachedBody) > 0 && time.Since(h.lastScrapeStarted) < time.Duration(config.ScrapeInterval)*time.Second
+}
+
+func (h *metricsCacheHandler) writeCached(w http.ResponseWriter) {
+	start := time.Now()
+	copyHeader(w.Header(), h.cachedHeader)
+	w.WriteHeader(h.cachedStatus)
+	_, _ = w.Write(h.cachedBody)
+	log.WithFields(log.Fields{
+		"cache_age":       time.Since(h.lastScrapeStarted),
+		"duration":        time.Since(start),
+		"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
+	}).Info("Metrics served from cache")
+}
+
+func copyHeader(dst, src http.Header) {
+	for key, values := range src {
+		dst.Del(key)
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
 
 func initLogger() {
 	log.SetLevel(getLogLevel())
@@ -93,15 +185,8 @@ func main() {
 	}
 
 	handler := http.NewServeMux()
-	metricsHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
-	handler.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		log.WithFields(log.Fields{
-			"remote_addr": r.RemoteAddr,
-			"method":      r.Method,
-			"user_agent":  r.UserAgent(),
-		}).Info("Metrics endpoint requested")
-		metricsHandler.ServeHTTP(w, r)
-	})
+	metricsHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{DisableCompression: true})
+	handler.Handle("/metrics", newMetricsCacheHandler(metricsHandler))
 	handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`<html>
              <head><title>RabbitMQ Exporter</title></head>
