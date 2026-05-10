@@ -211,6 +211,42 @@ func TestMetricsCacheWaitsForInitialRefresh(t *testing.T) {
 	}
 }
 
+func TestMetricsCacheBackgroundModeDoesNotStartRequestRefresh(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 1
+
+	refreshStarted := make(chan struct{})
+	finishRefresh := make(chan struct{})
+	handler := newMetricsCacheHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(refreshStarted)
+		<-finishRefresh
+		_, _ = w.Write([]byte("fresh metrics"))
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler.startBackgroundRefresh(ctx)
+	<-refreshStarted
+
+	served := make(chan string)
+	go func() {
+		req, _ := http.NewRequest("GET", "/metrics", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		served <- w.Body.String()
+	}()
+
+	select {
+	case body := <-served:
+		t.Fatalf("expected request to wait for background refresh, got %q", body)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	close(finishRefresh)
+	if body := <-served; body != "fresh metrics" {
+		t.Errorf("expected fresh metrics after background refresh, got %q", body)
+	}
+}
+
 func TestMetricsCacheRefreshesInBackground(t *testing.T) {
 	initConfig()
 	config.ScrapeInterval = 1

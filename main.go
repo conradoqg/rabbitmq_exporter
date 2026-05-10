@@ -26,6 +26,7 @@ type metricsCacheHandler struct {
 	handler           http.Handler
 	refreshCond       *sync.Cond
 	refreshing        bool
+	backgroundRefresh bool
 	lastScrapeStarted time.Time
 	cachedStatus      int
 	cachedHeader      http.Header
@@ -100,8 +101,8 @@ func (h *metricsCacheHandler) response(r *http.Request) metricsResponse {
 		h.mutex.Unlock()
 		return response
 	}
-	if h.refreshing {
-		for h.refreshing && len(h.cachedBody) == 0 {
+	if h.refreshing || h.backgroundRefresh {
+		for len(h.cachedBody) == 0 {
 			h.refreshCond.Wait()
 		}
 		response := h.cachedResponseLocked(false, waitStartedAt)
@@ -119,6 +120,9 @@ func (h *metricsCacheHandler) startBackgroundRefresh(ctx context.Context) {
 	if config.ScrapeInterval <= 0 {
 		return
 	}
+	h.mutex.Lock()
+	h.backgroundRefresh = true
+	h.mutex.Unlock()
 	go func() {
 		for {
 			started := time.Now()
