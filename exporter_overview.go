@@ -42,7 +42,7 @@ type exporterOverview struct {
 	nodeInfo        NodeInfo
 }
 
-//NodeInfo presents the name and version of fetched rabbitmq
+// NodeInfo presents the name and version of fetched rabbitmq
 type NodeInfo struct {
 	Node            string
 	RabbitmqVersion string
@@ -100,6 +100,9 @@ func (e *exporterOverview) Collect(ctx context.Context, ch chan<- prometheus.Met
 			log.WithFields(log.Fields{"key": key, "value": value}).Debug("Set overview metric for key")
 			gauge.Reset()
 			gauge.WithLabelValues(e.nodeInfo.ClusterName).Set(value)
+		} else if isRateMetric(key) {
+			gauge.Reset()
+			gauge.WithLabelValues(e.nodeInfo.ClusterName).Set(0)
 		}
 	}
 

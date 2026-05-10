@@ -160,10 +160,18 @@ func (h *metricsCacheHandler) refresh(r *http.Request) metricsResponse {
 	}
 
 	h.mutex.Lock()
-	h.cachedStatus = response.status
-	h.cachedHeader = response.header.Clone()
-	h.cachedBody = append(h.cachedBody[:0], response.body...)
-	h.lastScrapeStarted = started
+	if h.shouldReplaceCacheLocked(response.body) {
+		h.cachedStatus = response.status
+		h.cachedHeader = response.header.Clone()
+		h.cachedBody = append(h.cachedBody[:0], response.body...)
+		h.lastScrapeStarted = started
+	} else {
+		log.WithFields(log.Fields{
+			"old_body_bytes": len(h.cachedBody),
+			"new_body_bytes": len(response.body),
+		}).Warn("Discarding suspiciously small metrics payload")
+		response = h.cachedResponseLocked(false, started)
+	}
 	h.refreshing = false
 	h.refreshCond.Broadcast()
 	h.mutex.Unlock()
@@ -175,6 +183,13 @@ func (h *metricsCacheHandler) refresh(r *http.Request) metricsResponse {
 	}).Info("Background RabbitMQ metrics refreshed")
 
 	return response
+}
+
+func (h *metricsCacheHandler) shouldReplaceCacheLocked(newBody []byte) bool {
+	if len(h.cachedBody) == 0 {
+		return true
+	}
+	return len(newBody) >= len(h.cachedBody)*8/10
 }
 
 func newBackgroundMetricsRequest() *http.Request {

@@ -297,6 +297,57 @@ func TestMetricsCacheRefreshAcceptsNilRequest(t *testing.T) {
 	}
 }
 
+func TestMetricsCacheRejectsSuspiciouslySmallPayload(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 1
+
+	handler := newMetricsCacheHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("tiny"))
+	}))
+	handler.cachedStatus = http.StatusOK
+	handler.cachedHeader = http.Header{"Content-Type": []string{"text/plain"}}
+	handler.cachedBody = []byte("1234567890")
+	handler.lastScrapeStarted = time.Now()
+
+	response := handler.refresh(nil)
+	if string(response.body) != "1234567890" {
+		t.Errorf("expected previous cache after suspicious payload, got %q", string(response.body))
+	}
+}
+
+func TestQueueMissingRateMetricIsExportedAsZero(t *testing.T) {
+	server := setupServer(t, overviewTestData, `[{
+		"memory": 16056,
+		"message_stats": {"publish": 6},
+		"messages": 6,
+		"name": "myQueue1",
+		"vhost": "/",
+		"durable": true,
+		"policy": "",
+		"state": "running",
+		"node": "my-rabbit@ae74c041248b"
+	}]`, exchangeAPIResponse, nodesAPIResponse, connectionAPIResponse)
+	defer server.Close()
+
+	os.Setenv("RABBIT_URL", server.URL)
+	defer os.Unsetenv("RABBIT_URL")
+	os.Setenv("RABBIT_EXPORTERS", "queue")
+	defer os.Unsetenv("RABBIT_EXPORTERS")
+	os.Setenv("RABBIT_CAPABILITIES", " ")
+	defer os.Unsetenv("RABBIT_CAPABILITIES")
+	initConfig()
+
+	exporter := newExporter()
+	prometheus.MustRegister(exporter)
+	defer prometheus.Unregister(exporter)
+
+	req, _ := http.NewRequest("GET", "", nil)
+	w := httptest.NewRecorder()
+	promhttp.Handler().ServeHTTP(w, req)
+	body := w.Body.String()
+	expectSubstring(t, body, `rabbitmq_queue_messages_publish_rate{cluster="my-rabbit@ae74c041248b",durable="true",policy="",queue="myQueue1",self="1",vhost="/"} 0`)
+}
+
 func TestWholeApp(t *testing.T) {
 	server := setupServer(t, overviewTestData, queuesTestData, exchangeAPIResponse, nodesAPIResponse, connectionAPIResponse)
 	defer server.Close()
@@ -324,8 +375,8 @@ func TestWholeApp(t *testing.T) {
 	body := w.Body.String()
 	t.Log(body)
 	lines := strings.Split(body, "\n")
-	if lc := len(lines); lc != 390 {
-		t.Errorf("expected 390 lines, got %d", lc)
+	if lc := len(lines); lc != 411 {
+		t.Errorf("expected 411 lines, got %d", lc)
 	}
 	expectSubstring(t, body, `rabbitmq_up{cluster="my-rabbit@ae74c041248b",node="my-rabbit@ae74c041248b"} 1`)
 
@@ -697,7 +748,7 @@ func TestExporter(t *testing.T) {
 				`rabbitmq_queue_messages_ready{cluster="my-rabbit@ae74c041248b",durable="true",policy="ha-2",queue="myQueue2",self="1",vhost="/"} 25`,
 			},
 			dontExpect: []string{},
-			lines:      419,
+			lines:      443,
 		},
 		{
 			name: "Include specific queue",

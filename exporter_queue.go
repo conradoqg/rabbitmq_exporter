@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -186,6 +187,8 @@ func (e exporterQueue) Collect(ctx context.Context, ch chan<- prometheus.Metric)
 			if value, ok := queue.metrics[key]; ok {
 				// log.WithFields(log.Fields{"vhost": queue.labels["vhost"], "queue": queue.labels["name"], "key": key, "value": value}).Info("Set queue metric for key")
 				gaugevec.WithLabelValues(labelValues...).Set(value)
+			} else if isRateMetric(key) {
+				gaugevec.WithLabelValues(labelValues...).Set(0)
 			}
 		}
 
@@ -238,6 +241,10 @@ func (e exporterQueue) Collect(ctx context.Context, ch chan<- prometheus.Metric)
 	e.idleSinceMetric.Collect(ch)
 
 	return nil
+}
+
+func isRateMetric(key string) bool {
+	return strings.HasSuffix(key, "_details.rate")
 }
 
 func (e exporterQueue) Describe(ch chan<- *prometheus.Desc) {
