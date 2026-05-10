@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,15 +120,20 @@ func TestMetricsCacheIntervalStartsWhenScrapeStarts(t *testing.T) {
 		lastScrapeStarted: time.Now().Add(-29 * time.Second),
 		cachedBody:        []byte("cached metrics"),
 	}
+	handler.refreshCond = sync.NewCond(&handler.mutex)
 
-	if !handler.useCache() {
+	handler.mutex.Lock()
+	if !handler.useCacheLocked() {
 		t.Error("expected cache to be used before scrape interval elapsed from scrape start")
 	}
+	handler.mutex.Unlock()
 
 	handler.lastScrapeStarted = time.Now().Add(-31 * time.Second)
-	if handler.useCache() {
+	handler.mutex.Lock()
+	if handler.useCacheLocked() {
 		t.Error("expected cache to expire after scrape interval elapsed from scrape start")
 	}
+	handler.mutex.Unlock()
 }
 
 func TestMetricsCacheServesGzipWhenAccepted(t *testing.T) {
@@ -164,6 +170,42 @@ func TestMetricsCacheServesGzipWhenAccepted(t *testing.T) {
 	if string(body) != "cached metrics" {
 		t.Errorf("expected cached body, got %q", string(body))
 	}
+}
+
+func TestMetricsCacheServesStaleWhileRefreshing(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 1
+
+	refreshStarted := make(chan struct{})
+	finishRefresh := make(chan struct{})
+	handler := newMetricsCacheHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(refreshStarted)
+		<-finishRefresh
+		_, _ = w.Write([]byte("fresh metrics"))
+	}))
+	handler.cachedStatus = http.StatusOK
+	handler.cachedHeader = http.Header{"Content-Type": []string{"text/plain"}}
+	handler.cachedBody = []byte("stale metrics")
+	handler.lastScrapeStarted = time.Now().Add(-2 * time.Second)
+
+	refreshDone := make(chan struct{})
+	go func() {
+		defer close(refreshDone)
+		req, _ := http.NewRequest("GET", "/metrics", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+	}()
+	<-refreshStarted
+
+	req, _ := http.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if body := w.Body.String(); body != "stale metrics" {
+		t.Errorf("expected stale cache while refresh is running, got %q", body)
+	}
+
+	close(finishRefresh)
+	<-refreshDone
 }
 
 func TestWholeApp(t *testing.T) {

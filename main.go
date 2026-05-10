@@ -24,10 +24,22 @@ const (
 type metricsCacheHandler struct {
 	mutex             sync.Mutex
 	handler           http.Handler
+	refreshCond       *sync.Cond
+	refreshing        bool
 	lastScrapeStarted time.Time
 	cachedStatus      int
 	cachedHeader      http.Header
 	cachedBody        []byte
+}
+
+type metricsResponse struct {
+	status             int
+	header             http.Header
+	body               []byte
+	lastScrapeStarted  time.Time
+	servedFromCache    bool
+	servedStale        bool
+	cacheWaitStartedAt time.Time
 }
 
 type captureResponseWriter struct {
@@ -37,7 +49,9 @@ type captureResponseWriter struct {
 }
 
 func newMetricsCacheHandler(handler http.Handler) *metricsCacheHandler {
-	return &metricsCacheHandler{handler: handler}
+	h := &metricsCacheHandler{handler: handler}
+	h.refreshCond = sync.NewCond(&h.mutex)
+	return h
 }
 
 func (w *captureResponseWriter) Header() http.Header {
@@ -62,13 +76,45 @@ func (h *metricsCacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		"user_agent":  r.UserAgent(),
 	}).Info("Metrics endpoint requested")
 
-	h.mutex.Lock()
-	defer h.mutex.Unlock()
-
-	if h.useCache() {
-		h.writeCached(w, r)
-		return
+	response := h.response(r)
+	h.writeResponse(w, r, response)
+	if response.servedFromCache {
+		fields := log.Fields{
+			"cache_age":       time.Since(response.lastScrapeStarted),
+			"duration":        time.Since(response.cacheWaitStartedAt),
+			"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
+		}
+		if response.servedStale {
+			fields["stale"] = true
+		}
+		log.WithFields(fields).Info("Metrics served from cache")
 	}
+}
+
+func (h *metricsCacheHandler) response(r *http.Request) metricsResponse {
+	waitStartedAt := time.Now()
+
+	h.mutex.Lock()
+	if h.useCacheLocked() {
+		response := h.cachedResponseLocked(false, waitStartedAt)
+		h.mutex.Unlock()
+		return response
+	}
+	if h.refreshing && len(h.cachedBody) > 0 {
+		response := h.cachedResponseLocked(true, waitStartedAt)
+		h.mutex.Unlock()
+		return response
+	}
+	if h.refreshing {
+		for h.refreshing && len(h.cachedBody) == 0 {
+			h.refreshCond.Wait()
+		}
+		response := h.cachedResponseLocked(false, waitStartedAt)
+		h.mutex.Unlock()
+		return response
+	}
+	h.refreshing = true
+	h.mutex.Unlock()
 
 	started := time.Now()
 	capture := &captureResponseWriter{header: make(http.Header)}
@@ -77,41 +123,54 @@ func (h *metricsCacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		capture.status = http.StatusOK
 	}
 
-	h.cachedStatus = capture.status
-	h.cachedHeader = capture.header.Clone()
-	h.cachedBody = append(h.cachedBody[:0], capture.body.Bytes()...)
-	h.lastScrapeStarted = started
+	response := metricsResponse{
+		status:            capture.status,
+		header:            capture.header.Clone(),
+		body:              append([]byte(nil), capture.body.Bytes()...),
+		lastScrapeStarted: started,
+	}
 
-	h.writeResponse(w, r)
+	h.mutex.Lock()
+	h.cachedStatus = response.status
+	h.cachedHeader = response.header.Clone()
+	h.cachedBody = append(h.cachedBody[:0], response.body...)
+	h.lastScrapeStarted = started
+	h.refreshing = false
+	h.refreshCond.Broadcast()
+	h.mutex.Unlock()
+
+	return response
 }
 
-func (h *metricsCacheHandler) useCache() bool {
+func (h *metricsCacheHandler) useCacheLocked() bool {
 	return config.ScrapeInterval > 0 && len(h.cachedBody) > 0 && time.Since(h.lastScrapeStarted) < time.Duration(config.ScrapeInterval)*time.Second
 }
 
-func (h *metricsCacheHandler) writeCached(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	h.writeResponse(w, r)
-	log.WithFields(log.Fields{
-		"cache_age":       time.Since(h.lastScrapeStarted),
-		"duration":        time.Since(start),
-		"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
-	}).Info("Metrics served from cache")
+func (h *metricsCacheHandler) cachedResponseLocked(stale bool, waitStartedAt time.Time) metricsResponse {
+	return metricsResponse{
+		status:             h.cachedStatus,
+		header:             h.cachedHeader.Clone(),
+		body:               append([]byte(nil), h.cachedBody...),
+		lastScrapeStarted:  h.lastScrapeStarted,
+		servedFromCache:    true,
+		servedStale:        stale,
+		cacheWaitStartedAt: waitStartedAt,
+	}
 }
 
-func (h *metricsCacheHandler) writeResponse(w http.ResponseWriter, r *http.Request) {
-	copyHeader(w.Header(), h.cachedHeader)
+func (h *metricsCacheHandler) writeResponse(w http.ResponseWriter, r *http.Request, response metricsResponse) {
+	copyHeader(w.Header(), response.header)
 	if r != nil && acceptsGzip(r) {
 		w.Header().Set("Content-Encoding", "gzip")
-		w.WriteHeader(h.cachedStatus)
+		w.WriteHeader(response.status)
 		gz := gzip.NewWriter(w)
-		_, _ = gz.Write(h.cachedBody)
+		_, _ = gz.Write(response.body)
 		_ = gz.Close()
 		return
 	}
 	w.Header().Del("Content-Encoding")
-	w.WriteHeader(h.cachedStatus)
-	_, _ = w.Write(h.cachedBody)
+	w.WriteHeader(response.status)
+	_, _ = w.Write(response.body)
 }
 
 func acceptsGzip(r *http.Request) bool {
