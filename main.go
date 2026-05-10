@@ -139,6 +139,9 @@ func (h *metricsCacheHandler) startBackgroundRefresh(ctx context.Context) {
 func (h *metricsCacheHandler) refresh(r *http.Request) metricsResponse {
 	started := time.Now()
 	log.WithField("scrape_interval", time.Duration(config.ScrapeInterval)*time.Second).Info("Background RabbitMQ metrics refresh started")
+	if r == nil {
+		r = newBackgroundMetricsRequest()
+	}
 	capture := &captureResponseWriter{header: make(http.Header)}
 	h.handler.ServeHTTP(capture, r)
 	if capture.status == 0 {
@@ -168,6 +171,11 @@ func (h *metricsCacheHandler) refresh(r *http.Request) metricsResponse {
 	}).Info("Background RabbitMQ metrics refreshed")
 
 	return response
+}
+
+func newBackgroundMetricsRequest() *http.Request {
+	req, _ := http.NewRequest("GET", "/metrics", nil)
+	return req
 }
 
 func (h *metricsCacheHandler) cachedResponseLocked(stale bool, waitStartedAt time.Time) metricsResponse {

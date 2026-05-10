@@ -241,6 +241,26 @@ func TestMetricsCacheRefreshesInBackground(t *testing.T) {
 	}
 }
 
+func TestMetricsCacheRefreshAcceptsNilRequest(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 1
+
+	handler := newMetricsCacheHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r == nil {
+			t.Fatal("request should not be nil")
+		}
+		if r.URL.Path != "/metrics" {
+			t.Fatalf("expected /metrics request, got %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("fresh metrics"))
+	}))
+
+	response := handler.refresh(nil)
+	if string(response.body) != "fresh metrics" {
+		t.Errorf("expected fresh metrics, got %q", string(response.body))
+	}
+}
+
 func TestWholeApp(t *testing.T) {
 	server := setupServer(t, overviewTestData, queuesTestData, exchangeAPIResponse, nodesAPIResponse, connectionAPIResponse)
 	defer server.Close()
