@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -112,28 +113,24 @@ func TestScrapeIntervalCachesMetrics(t *testing.T) {
 	}
 }
 
-func TestMetricsCacheIntervalStartsWhenScrapeStarts(t *testing.T) {
+func TestMetricsCacheServesCachedBody(t *testing.T) {
 	initConfig()
 	config.ScrapeInterval = 30
 
 	handler := &metricsCacheHandler{
-		lastScrapeStarted: time.Now().Add(-29 * time.Second),
+		cachedStatus:      http.StatusOK,
+		cachedHeader:      http.Header{"Content-Type": []string{"text/plain"}},
 		cachedBody:        []byte("cached metrics"),
+		lastScrapeStarted: time.Now().Add(-2 * time.Minute),
 	}
 	handler.refreshCond = sync.NewCond(&handler.mutex)
 
-	handler.mutex.Lock()
-	if !handler.useCacheLocked() {
-		t.Error("expected cache to be used before scrape interval elapsed from scrape start")
+	req, _ := http.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if body := w.Body.String(); body != "cached metrics" {
+		t.Errorf("expected cached body, got %q", body)
 	}
-	handler.mutex.Unlock()
-
-	handler.lastScrapeStarted = time.Now().Add(-31 * time.Second)
-	handler.mutex.Lock()
-	if handler.useCacheLocked() {
-		t.Error("expected cache to expire after scrape interval elapsed from scrape start")
-	}
-	handler.mutex.Unlock()
 }
 
 func TestMetricsCacheServesGzipWhenAccepted(t *testing.T) {
@@ -172,7 +169,7 @@ func TestMetricsCacheServesGzipWhenAccepted(t *testing.T) {
 	}
 }
 
-func TestMetricsCacheServesStaleWhileRefreshing(t *testing.T) {
+func TestMetricsCacheWaitsForInitialRefresh(t *testing.T) {
 	initConfig()
 	config.ScrapeInterval = 1
 
@@ -183,10 +180,6 @@ func TestMetricsCacheServesStaleWhileRefreshing(t *testing.T) {
 		<-finishRefresh
 		_, _ = w.Write([]byte("fresh metrics"))
 	}))
-	handler.cachedStatus = http.StatusOK
-	handler.cachedHeader = http.Header{"Content-Type": []string{"text/plain"}}
-	handler.cachedBody = []byte("stale metrics")
-	handler.lastScrapeStarted = time.Now().Add(-2 * time.Second)
 
 	refreshDone := make(chan struct{})
 	go func() {
@@ -197,15 +190,55 @@ func TestMetricsCacheServesStaleWhileRefreshing(t *testing.T) {
 	}()
 	<-refreshStarted
 
-	req, _ := http.NewRequest("GET", "/metrics", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if body := w.Body.String(); body != "stale metrics" {
-		t.Errorf("expected stale cache while refresh is running, got %q", body)
+	served := make(chan string)
+	go func() {
+		req, _ := http.NewRequest("GET", "/metrics", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		served <- w.Body.String()
+	}()
+
+	select {
+	case body := <-served:
+		t.Fatalf("expected request to wait for initial refresh, got %q", body)
+	case <-time.After(10 * time.Millisecond):
 	}
 
 	close(finishRefresh)
 	<-refreshDone
+	if body := <-served; body != "fresh metrics" {
+		t.Errorf("expected fresh metrics after initial refresh, got %q", body)
+	}
+}
+
+func TestMetricsCacheRefreshesInBackground(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 1
+
+	var requests int32
+	handler := newMetricsCacheHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(fmt.Sprintf("refresh %d", atomic.AddInt32(&requests, 1))))
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler.startBackgroundRefresh(ctx)
+
+	deadline := time.After(1500 * time.Millisecond)
+	for atomic.LoadInt32(&requests) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("expected at least two background refreshes, got %d", atomic.LoadInt32(&requests))
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	req, _ := http.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if body := w.Body.String(); body != "refresh 2" {
+		t.Errorf("expected latest background cache, got %q", body)
+	}
 }
 
 func TestWholeApp(t *testing.T) {

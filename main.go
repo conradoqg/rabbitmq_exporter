@@ -95,13 +95,8 @@ func (h *metricsCacheHandler) response(r *http.Request) metricsResponse {
 	waitStartedAt := time.Now()
 
 	h.mutex.Lock()
-	if h.useCacheLocked() {
+	if len(h.cachedBody) > 0 {
 		response := h.cachedResponseLocked(false, waitStartedAt)
-		h.mutex.Unlock()
-		return response
-	}
-	if h.refreshing && len(h.cachedBody) > 0 {
-		response := h.cachedResponseLocked(true, waitStartedAt)
 		h.mutex.Unlock()
 		return response
 	}
@@ -116,7 +111,34 @@ func (h *metricsCacheHandler) response(r *http.Request) metricsResponse {
 	h.refreshing = true
 	h.mutex.Unlock()
 
+	response := h.refresh(r)
+	return response
+}
+
+func (h *metricsCacheHandler) startBackgroundRefresh(ctx context.Context) {
+	if config.ScrapeInterval <= 0 {
+		return
+	}
+	go func() {
+		for {
+			started := time.Now()
+			h.refresh(nil)
+			wait := time.Duration(config.ScrapeInterval)*time.Second - time.Since(started)
+			if wait < 0 {
+				wait = 0
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+	}()
+}
+
+func (h *metricsCacheHandler) refresh(r *http.Request) metricsResponse {
 	started := time.Now()
+	log.WithField("scrape_interval", time.Duration(config.ScrapeInterval)*time.Second).Info("Background RabbitMQ metrics refresh started")
 	capture := &captureResponseWriter{header: make(http.Header)}
 	h.handler.ServeHTTP(capture, r)
 	if capture.status == 0 {
@@ -139,11 +161,13 @@ func (h *metricsCacheHandler) response(r *http.Request) metricsResponse {
 	h.refreshCond.Broadcast()
 	h.mutex.Unlock()
 
-	return response
-}
+	log.WithFields(log.Fields{
+		"body_bytes":      len(response.body),
+		"duration":        time.Since(started),
+		"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
+	}).Info("Background RabbitMQ metrics refreshed")
 
-func (h *metricsCacheHandler) useCacheLocked() bool {
-	return config.ScrapeInterval > 0 && len(h.cachedBody) > 0 && time.Since(h.lastScrapeStarted) < time.Duration(config.ScrapeInterval)*time.Second
+	return response
 }
 
 func (h *metricsCacheHandler) cachedResponseLocked(stale bool, waitStartedAt time.Time) metricsResponse {
@@ -264,9 +288,14 @@ func main() {
 		}).Warn("RABBIT_SCRAPE_INTERVAL is lower than RABBIT_TIMEOUT; RabbitMQ scrapes may run longer than the configured minimum interval")
 	}
 
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	defer serverCancel()
+
 	handler := http.NewServeMux()
 	metricsHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{DisableCompression: true})
-	handler.Handle("/metrics", newMetricsCacheHandler(metricsHandler))
+	metricsCache := newMetricsCacheHandler(metricsHandler)
+	metricsCache.startBackgroundRefresh(serverCtx)
+	handler.Handle("/metrics", metricsCache)
 	handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`<html>
              <head><title>RabbitMQ Exporter</title></head>
@@ -294,6 +323,7 @@ func main() {
 
 	<-runService()
 	log.Info("Shutting down")
+	serverCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := server.Shutdown(ctx); err != nil {
