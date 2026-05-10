@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"flag"
 	"net/http"
@@ -65,7 +66,7 @@ func (h *metricsCacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	defer h.mutex.Unlock()
 
 	if h.useCache() {
-		h.writeCached(w)
+		h.writeCached(w, r)
 		return
 	}
 
@@ -81,25 +82,45 @@ func (h *metricsCacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	h.cachedBody = append(h.cachedBody[:0], capture.body.Bytes()...)
 	h.lastScrapeStarted = started
 
-	copyHeader(w.Header(), h.cachedHeader)
-	w.WriteHeader(h.cachedStatus)
-	_, _ = w.Write(h.cachedBody)
+	h.writeResponse(w, r)
 }
 
 func (h *metricsCacheHandler) useCache() bool {
 	return config.ScrapeInterval > 0 && len(h.cachedBody) > 0 && time.Since(h.lastScrapeStarted) < time.Duration(config.ScrapeInterval)*time.Second
 }
 
-func (h *metricsCacheHandler) writeCached(w http.ResponseWriter) {
+func (h *metricsCacheHandler) writeCached(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	copyHeader(w.Header(), h.cachedHeader)
-	w.WriteHeader(h.cachedStatus)
-	_, _ = w.Write(h.cachedBody)
+	h.writeResponse(w, r)
 	log.WithFields(log.Fields{
 		"cache_age":       time.Since(h.lastScrapeStarted),
 		"duration":        time.Since(start),
 		"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
 	}).Info("Metrics served from cache")
+}
+
+func (h *metricsCacheHandler) writeResponse(w http.ResponseWriter, r *http.Request) {
+	copyHeader(w.Header(), h.cachedHeader)
+	if r != nil && acceptsGzip(r) {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(h.cachedStatus)
+		gz := gzip.NewWriter(w)
+		_, _ = gz.Write(h.cachedBody)
+		_ = gz.Close()
+		return
+	}
+	w.Header().Del("Content-Encoding")
+	w.WriteHeader(h.cachedStatus)
+	_, _ = w.Write(h.cachedBody)
+}
+
+func acceptsGzip(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		if strings.TrimSpace(strings.Split(part, ";")[0]) == "gzip" {
+			return true
+		}
+	}
+	return false
 }
 
 func copyHeader(dst, src http.Header) {

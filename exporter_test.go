@@ -1,7 +1,9 @@
 package main
 
 import (
+	"compress/gzip"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -125,6 +127,42 @@ func TestMetricsCacheIntervalStartsWhenScrapeStarts(t *testing.T) {
 	handler.lastScrapeStarted = time.Now().Add(-31 * time.Second)
 	if handler.useCache() {
 		t.Error("expected cache to expire after scrape interval elapsed from scrape start")
+	}
+}
+
+func TestMetricsCacheServesGzipWhenAccepted(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 60
+
+	handler := newMetricsCacheHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("cached metrics"))
+	}))
+
+	firstReq, _ := http.NewRequest("GET", "/metrics", nil)
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, firstReq)
+
+	req, _ := http.NewRequest("GET", "/metrics", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Errorf("expected gzip content encoding, got %q", got)
+	}
+
+	gz, err := gzip.NewReader(w.Body)
+	if err != nil {
+		t.Fatalf("expected gzip body: %v", err)
+	}
+	defer gz.Close()
+	body, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatalf("reading gzip body failed: %v", err)
+	}
+	if string(body) != "cached metrics" {
+		t.Errorf("expected cached body, got %q", string(body))
 	}
 }
 
