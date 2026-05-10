@@ -24,7 +24,6 @@ checksum:
 changelog:
   use: github-native
 release:
-  discussion_category_name: Announcements
   footer: |
     ## Docker images
 
