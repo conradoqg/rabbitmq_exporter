@@ -28,77 +28,77 @@ release:
   footer: |
     ## Docker images
 
-    - `docker pull ghcr.io/kbudde/rabbitmq_exporter:{{.Version}}`
-    - `docker pull ghcr.io/kbudde/rabbitmq_exporter:{{.ShortCommit}}`
+    - `docker pull ghcr.io/conradoqg/rabbitmq_exporter:{{.Version}}`
+    - `docker pull ghcr.io/conradoqg/rabbitmq_exporter:{{.ShortCommit}}`
 
 dockers:
 - goos: linux
   goarch: amd64
   image_templates:
-    - "ghcr.io/kbudde/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}"
+    - "ghcr.io/conradoqg/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
   - "--label=org.opencontainers.image.created={{.Date}}"
   - "--label=org.opencontainers.image.title={{.ProjectName}}"
   - "--label=org.opencontainers.image.revision={{.FullCommit}}"
   - "--label=org.opencontainers.image.version={{.Version}}"
-  - "--label=org.opencontainers.image.source=https://github.com/kbudde/rabbitmq_exporter"
+  - "--label=org.opencontainers.image.source=https://github.com/conradoqg/rabbitmq_exporter"
   - "--platform=linux/amd64"
 
 - goos: linux
   goarch: arm
   goarm: "6"
   image_templates:
-  - "ghcr.io/kbudde/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}"
+  - "ghcr.io/conradoqg/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
   - "--label=org.opencontainers.image.created={{.Date}}"
   - "--label=org.opencontainers.image.title={{.ProjectName}}"
   - "--label=org.opencontainers.image.revision={{.FullCommit}}"
   - "--label=org.opencontainers.image.version={{.Version}}"
-  - "--label=org.opencontainers.image.source=https://github.com/kbudde/rabbitmq_exporter"
+  - "--label=org.opencontainers.image.source=https://github.com/conradoqg/rabbitmq_exporter"
   - "--platform=linux/arm/v6"
 
 - goos: linux
   goarch: arm
   goarm: "7"
   image_templates:
-  - "ghcr.io/kbudde/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}"
+  - "ghcr.io/conradoqg/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
   - "--label=org.opencontainers.image.created={{.Date}}"
   - "--label=org.opencontainers.image.title={{.ProjectName}}"
   - "--label=org.opencontainers.image.revision={{.FullCommit}}"
   - "--label=org.opencontainers.image.version={{.Version}}"
-  - "--label=org.opencontainers.image.source=https://github.com/kbudde/rabbitmq_exporter"
+  - "--label=org.opencontainers.image.source=https://github.com/conradoqg/rabbitmq_exporter"
   - "--platform=linux/arm/v7"
 
 - goos: linux
   goarch: arm64
   image_templates:
-  - "ghcr.io/kbudde/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}"
+  - "ghcr.io/conradoqg/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
   - "--label=org.opencontainers.image.created={{.Date}}"
   - "--label=org.opencontainers.image.title={{.ProjectName}}"
   - "--label=org.opencontainers.image.revision={{.FullCommit}}"
   - "--label=org.opencontainers.image.version={{.Version}}"
-  - "--label=org.opencontainers.image.source=https://github.com/kbudde/rabbitmq_exporter"
+  - "--label=org.opencontainers.image.source=https://github.com/conradoqg/rabbitmq_exporter"
   - "--platform=linux/arm64"
 
 
 docker_manifests:
 -
-  name_template: ghcr.io/kbudde/rabbitmq_exporter:latest
+  name_template: ghcr.io/conradoqg/rabbitmq_exporter:latest
   image_templates:
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}
 -
-  name_template: ghcr.io/kbudde/rabbitmq_exporter:{{.Version}}
+  name_template: ghcr.io/conradoqg/rabbitmq_exporter:{{.Version}}
   image_templates:
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}
-  - ghcr.io/kbudde/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}
+  - ghcr.io/conradoqg/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}
