@@ -109,13 +109,19 @@ func (e *exporter) useCachedMetrics() bool {
 
 func (e *exporter) collectFreshMetrics(ch chan<- prometheus.Metric, scrapeRabbitMQ bool) {
 
+	start := time.Now()
+	cacheAge := time.Duration(0)
+	if !e.lastScrapeStartedAt.IsZero() {
+		cacheAge = time.Since(e.lastScrapeStartedAt)
+	}
+
 	if scrapeRabbitMQ {
 		e.upMetric.Reset()
 		e.endpointUpMetric.Reset()
 		e.endpointScrapeDurationMetric.Reset()
+		log.WithField("scrape_interval", time.Duration(config.ScrapeInterval)*time.Second).Info("Refreshing RabbitMQ metrics")
 	}
 
-	start := time.Now()
 	if scrapeRabbitMQ {
 		allUp := true
 
@@ -147,7 +153,15 @@ func (e *exporter) collectFreshMetrics(ch chan<- prometheus.Metric, scrapeRabbit
 	e.upMetric.Collect(ch)
 	e.endpointUpMetric.Collect(ch)
 	e.endpointScrapeDurationMetric.Collect(ch)
-	log.WithField("duration", time.Since(start)).Info("Metrics updated")
+	if scrapeRabbitMQ {
+		log.WithField("duration", time.Since(start)).Info("RabbitMQ metrics refreshed")
+	} else {
+		log.WithFields(log.Fields{
+			"cache_age":       cacheAge,
+			"duration":        time.Since(start),
+			"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
+		}).Info("Metrics served from cache")
+	}
 
 }
 
