@@ -28,6 +28,7 @@ type metricsCacheHandler struct {
 	refreshing        bool
 	backgroundRefresh bool
 	lastScrapeStarted time.Time
+	lastCacheUpdated  time.Time
 	cachedStatus      int
 	cachedHeader      http.Header
 	cachedBody        []byte
@@ -38,6 +39,7 @@ type metricsResponse struct {
 	header             http.Header
 	body               []byte
 	lastScrapeStarted  time.Time
+	lastCacheUpdated   time.Time
 	servedFromCache    bool
 	servedStale        bool
 	cacheWaitStartedAt time.Time
@@ -81,7 +83,8 @@ func (h *metricsCacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	h.writeResponse(w, r, response)
 	if response.servedFromCache {
 		fields := log.Fields{
-			"cache_age":       time.Since(response.lastScrapeStarted),
+			"cache_age":       time.Since(response.lastCacheUpdated),
+			"scrape_age":      time.Since(response.lastScrapeStarted),
 			"duration":        time.Since(response.cacheWaitStartedAt),
 			"scrape_interval": time.Duration(config.ScrapeInterval) * time.Second,
 		}
@@ -159,12 +162,15 @@ func (h *metricsCacheHandler) refresh(r *http.Request) metricsResponse {
 		lastScrapeStarted: started,
 	}
 
+	finished := time.Now()
 	h.mutex.Lock()
 	if h.shouldReplaceCacheLocked(response.body) {
 		h.cachedStatus = response.status
 		h.cachedHeader = response.header.Clone()
 		h.cachedBody = append(h.cachedBody[:0], response.body...)
 		h.lastScrapeStarted = started
+		h.lastCacheUpdated = finished
+		response.lastCacheUpdated = finished
 	} else {
 		log.WithFields(log.Fields{
 			"old_body_bytes": len(h.cachedBody),
@@ -203,6 +209,7 @@ func (h *metricsCacheHandler) cachedResponseLocked(stale bool, waitStartedAt tim
 		header:             h.cachedHeader.Clone(),
 		body:               append([]byte(nil), h.cachedBody...),
 		lastScrapeStarted:  h.lastScrapeStarted,
+		lastCacheUpdated:   h.lastCacheUpdated,
 		servedFromCache:    true,
 		servedStale:        stale,
 		cacheWaitStartedAt: waitStartedAt,

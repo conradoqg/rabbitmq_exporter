@@ -122,6 +122,7 @@ func TestMetricsCacheServesCachedBody(t *testing.T) {
 		cachedHeader:      http.Header{"Content-Type": []string{"text/plain"}},
 		cachedBody:        []byte("cached metrics"),
 		lastScrapeStarted: time.Now().Add(-2 * time.Minute),
+		lastCacheUpdated:  time.Now(),
 	}
 	handler.refreshCond = sync.NewCond(&handler.mutex)
 
@@ -308,10 +309,40 @@ func TestMetricsCacheRejectsSuspiciouslySmallPayload(t *testing.T) {
 	handler.cachedHeader = http.Header{"Content-Type": []string{"text/plain"}}
 	handler.cachedBody = []byte("1234567890")
 	handler.lastScrapeStarted = time.Now()
+	handler.lastCacheUpdated = time.Now()
 
 	response := handler.refresh(nil)
 	if string(response.body) != "1234567890" {
 		t.Errorf("expected previous cache after suspicious payload, got %q", string(response.body))
+	}
+}
+
+func TestMetricsCacheTracksCacheUpdateSeparatelyFromScrapeStart(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 1
+
+	finishRefresh := make(chan struct{})
+	handler := newMetricsCacheHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-finishRefresh
+		_, _ = w.Write([]byte("fresh metrics"))
+	}))
+
+	refreshed := make(chan metricsResponse)
+	go func() {
+		refreshed <- handler.refresh(nil)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	close(finishRefresh)
+	response := <-refreshed
+
+	if !response.lastCacheUpdated.After(response.lastScrapeStarted) {
+		t.Errorf("expected cache update time after scrape start, got scrape=%v cache=%v", response.lastScrapeStarted, response.lastCacheUpdated)
+	}
+
+	cached := handler.cachedResponseLocked(false, time.Now())
+	if !cached.lastCacheUpdated.Equal(response.lastCacheUpdated) {
+		t.Errorf("expected cached response to keep cache update time, got %v want %v", cached.lastCacheUpdated, response.lastCacheUpdated)
 	}
 }
 
