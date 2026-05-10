@@ -30,14 +30,11 @@ release:
 
     - `docker pull ghcr.io/kbudde/rabbitmq_exporter:{{.Version}}`
     - `docker pull ghcr.io/kbudde/rabbitmq_exporter:{{.ShortCommit}}`
-    - `docker pull kbudde/rabbitmq-exporter:{{.Version}}`
-    - `docker pull kbudde/rabbitmq-exporter:{{.ShortCommit}}`
 
 dockers:
 - goos: linux
   goarch: amd64
   image_templates:
-    - "kbudde/rabbitmq-exporter:linux-amd64-{{.ShortCommit}}"
     - "ghcr.io/kbudde/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
@@ -52,7 +49,6 @@ dockers:
   goarch: arm
   goarm: "6"
   image_templates:
-  - "kbudde/rabbitmq-exporter:linux-arm6-{{.ShortCommit}}"
   - "ghcr.io/kbudde/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
@@ -67,7 +63,6 @@ dockers:
   goarch: arm
   goarm: "7"
   image_templates:
-  - "kbudde/rabbitmq-exporter:linux-arm7-{{.ShortCommit}}"
   - "ghcr.io/kbudde/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
@@ -81,7 +76,6 @@ dockers:
 - goos: linux
   goarch: arm64
   image_templates:
-  - "kbudde/rabbitmq-exporter:linux-arm64-{{.ShortCommit}}"
   - "ghcr.io/kbudde/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}"
   use: buildx
   build_flag_templates:
@@ -102,23 +96,9 @@ docker_manifests:
   - ghcr.io/kbudde/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}
   - ghcr.io/kbudde/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}
 -
-  name_template: kbudde/rabbitmq-exporter:latest
-  image_templates:
-  - kbudde/rabbitmq-exporter:linux-amd64-{{.ShortCommit}}
-  - kbudde/rabbitmq-exporter:linux-arm6-{{.ShortCommit}}
-  - kbudde/rabbitmq-exporter:linux-arm7-{{.ShortCommit}}
-  - kbudde/rabbitmq-exporter:linux-arm64-{{.ShortCommit}}
--
   name_template: ghcr.io/kbudde/rabbitmq_exporter:{{.Version}}
   image_templates:
   - ghcr.io/kbudde/rabbitmq_exporter:linux-amd64-{{.ShortCommit}}
   - ghcr.io/kbudde/rabbitmq_exporter:linux-arm6-{{.ShortCommit}}
   - ghcr.io/kbudde/rabbitmq_exporter:linux-arm7-{{.ShortCommit}}
   - ghcr.io/kbudde/rabbitmq_exporter:linux-arm64-{{.ShortCommit}}
--
-  name_template: kbudde/rabbitmq-exporter:{{.Version}}
-  image_templates:
-  - kbudde/rabbitmq-exporter:linux-amd64-{{.ShortCommit}}
-  - kbudde/rabbitmq-exporter:linux-arm6-{{.ShortCommit}}
-  - kbudde/rabbitmq-exporter:linux-arm7-{{.ShortCommit}}
-  - kbudde/rabbitmq-exporter:linux-arm64-{{.ShortCommit}}

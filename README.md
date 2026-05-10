@@ -70,6 +70,7 @@ SKIP_EXCHANGES  | ^$ | regex, matching exchanges names are not exported. First p
 RABBIT_CAPABILITIES | bert,no_sort | comma-separated list of extended scraping capabilities supported by the target RabbitMQ server
 RABBIT_EXPORTERS | exchange,node,queue | List of enabled modules. Possible modules: connections,shovel,federation,exchange,node,queue,memory
 RABBIT_TIMEOUT | 30 | timeout in seconds for retrieving data from management plugin.
+RABBIT_SCRAPE_INTERVAL | 0 | minimum interval in seconds between RabbitMQ management API scrapes. When set, repeated /metrics requests within the interval return cached metrics.
 MAX_QUEUES | 0 | max number of queues before we drop metrics (disabled if set to 0)
 EXCLUDE_METRICS | | Metric names to exclude from export. comma-seperated. e.g. "recv_oct, recv_cnt". See exporter_*.go for names
 

@@ -8,7 +8,9 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -59,6 +61,71 @@ func setupServer(t *testing.T, overview, queues, exchange, nodes, connections st
 
 	}))
 	return server
+}
+
+func TestScrapeIntervalCachesMetrics(t *testing.T) {
+	var overviewRequests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.RequestURI, "/api/overview") {
+			atomic.AddInt32(&overviewRequests, 1)
+			fmt.Fprintln(w, overviewTestData)
+			return
+		}
+		t.Errorf("Invalid request. URI=%v", r.RequestURI)
+		fmt.Fprintf(w, "Invalid request. URI=%v", r.RequestURI)
+	}))
+	defer server.Close()
+
+	os.Setenv("RABBIT_URL", server.URL)
+	defer os.Unsetenv("RABBIT_URL")
+	os.Setenv("RABBIT_EXPORTERS", "")
+	defer os.Unsetenv("RABBIT_EXPORTERS")
+	os.Setenv("RABBIT_SCRAPE_INTERVAL", "60")
+	defer os.Unsetenv("RABBIT_SCRAPE_INTERVAL")
+	os.Setenv("RABBIT_CAPABILITIES", " ")
+	defer os.Unsetenv("RABBIT_CAPABILITIES")
+	initConfig()
+	config.EnabledExporters = []string{}
+
+	exporter := newExporter()
+	prometheus.MustRegister(exporter)
+	defer prometheus.Unregister(exporter)
+
+	for i := 0; i < 2; i++ {
+		req, _ := http.NewRequest("GET", "", nil)
+		w := httptest.NewRecorder()
+		promhttp.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("Metrics endpoint didn't return %v", http.StatusOK)
+		}
+		expectSubstring(t, w.Body.String(), `rabbitmq_up{cluster="my-rabbit@ae74c041248b",node="my-rabbit@ae74c041248b"} 1`)
+	}
+
+	if got := atomic.LoadInt32(&overviewRequests); got != 1 {
+		t.Errorf("expected one RabbitMQ scrape, got %d", got)
+	}
+}
+
+func TestScrapeIntervalStartsWhenScrapeStarts(t *testing.T) {
+	initConfig()
+	config.ScrapeInterval = 30
+
+	exporter := newExporter()
+	exporter.cachedMetrics = []prometheus.Metric{
+		prometheus.MustNewConstMetric(prometheus.NewDesc("rabbitmq_test_metric", "test metric", nil, nil), prometheus.GaugeValue, 1),
+	}
+	exporter.lastScrapeStartedAt = time.Now().Add(-29 * time.Second)
+
+	if !exporter.useCachedMetrics() {
+		t.Error("expected cache to be used before scrape interval elapsed from scrape start")
+	}
+
+	exporter.lastScrapeStartedAt = time.Now().Add(-31 * time.Second)
+	if exporter.useCachedMetrics() {
+		t.Error("expected cache to expire after scrape interval elapsed from scrape start")
+	}
 }
 
 func TestWholeApp(t *testing.T) {
@@ -246,7 +313,7 @@ func TestRabbitError(t *testing.T) {
 	}
 }
 
-//TestResetMetricsOnRabbitFailure verifies the behaviour of the exporter if the rabbitmq fails after one successfull retrieval of the data
+// TestResetMetricsOnRabbitFailure verifies the behaviour of the exporter if the rabbitmq fails after one successfull retrieval of the data
 // List of metrics should be empty except rabbitmq_up{cluster="my-rabbit@ae74c041248b",node="my-rabbit@ae74c041248b"} should be 0
 func TestResetMetricsOnRabbitFailure(t *testing.T) {
 	rabbitUP := true
@@ -427,7 +494,7 @@ func TestResetMetricsOnRabbitFailure(t *testing.T) {
 	t.Run("RabbitMQ is using loadbalancer -> self is always 1", func(t *testing.T) {
 		rabbitUP = true
 		rabbitQueuesUp = true
-        config.RabbitConnection = "loadbalancer"
+		config.RabbitConnection = "loadbalancer"
 		req, _ := http.NewRequest("GET", "", nil)
 		w := httptest.NewRecorder()
 		promhttp.Handler().ServeHTTP(w, req)

@@ -37,6 +37,7 @@ var (
 		EnabledExporters:   []string{"exchange", "node", "overview", "queue"},
 		Timeout:            30,
 		MaxQueues:          0,
+		ScrapeInterval:     0,
 	}
 )
 
@@ -71,6 +72,7 @@ type rabbitExporterConfig struct {
 	EnabledExporters         []string            `json:"enabled_exporters"`
 	Timeout                  int                 `json:"timeout"`
 	MaxQueues                int                 `json:"max_queues"`
+	ScrapeInterval           int                 `json:"scrape_interval"`
 }
 
 type rabbitCapability string
@@ -242,6 +244,14 @@ func initConfig() {
 		}
 		config.MaxQueues = m
 	}
+
+	if scrapeInterval := os.Getenv("RABBIT_SCRAPE_INTERVAL"); scrapeInterval != "" {
+		s, err := strconv.Atoi(scrapeInterval)
+		if err != nil {
+			panic(fmt.Errorf("scrapeInterval is not a number: %v", err))
+		}
+		config.ScrapeInterval = s
+	}
 }
 
 func parseCapabilities(raw string) rabbitCapabilitySet {
@@ -264,8 +274,8 @@ func isCapEnabled(config rabbitExporterConfig, cap rabbitCapability) bool {
 
 func selfLabel(config rabbitExporterConfig, isSelf bool) string {
 	if config.RabbitConnection == "loadbalancer" {
-        return "lb"
-    } else if isSelf {
+		return "lb"
+	} else if isSelf {
 		return "1"
 	} else {
 		return "0"

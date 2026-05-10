@@ -60,29 +60,37 @@ func main() {
 	}).Info("Starting RabbitMQ exporter")
 
 	log.WithFields(log.Fields{
-		"PUBLISH_ADDR":        config.PublishAddr,
-		"PUBLISH_PORT":        config.PublishPort,
-		"RABBIT_URL":          config.RabbitURL,
-		"RABBIT_USER":         config.RabbitUsername,
-		"RABBIT_CONNECTION":   config.RabbitConnection,
-		"OUTPUT_FORMAT":       config.OutputFormat,
-		"RABBIT_CAPABILITIES": formatCapabilities(config.RabbitCapabilities),
-		"RABBIT_EXPORTERS":    config.EnabledExporters,
-		"CAFILE":              config.CAFile,
-		"CERTFILE":            config.CertFile,
-		"KEYFILE":             config.KeyFile,
-		"SKIPVERIFY":          config.InsecureSkipVerify,
-		"EXCLUDE_METRICS":     config.ExcludeMetrics,
-		"SKIP_EXCHANGES":      config.SkipExchanges.String(),
-		"INCLUDE_EXCHANGES":   config.IncludeExchanges.String(),
-		"SKIP_QUEUES":         config.SkipQueues.String(),
-		"INCLUDE_QUEUES":      config.IncludeQueues.String(),
-		"SKIP_VHOST":          config.SkipVHost.String(),
-		"INCLUDE_VHOST":       config.IncludeVHost.String(),
-		"RABBIT_TIMEOUT":      config.Timeout,
-		"MAX_QUEUES":          config.MaxQueues,
+		"PUBLISH_ADDR":           config.PublishAddr,
+		"PUBLISH_PORT":           config.PublishPort,
+		"RABBIT_URL":             config.RabbitURL,
+		"RABBIT_USER":            config.RabbitUsername,
+		"RABBIT_CONNECTION":      config.RabbitConnection,
+		"OUTPUT_FORMAT":          config.OutputFormat,
+		"RABBIT_CAPABILITIES":    formatCapabilities(config.RabbitCapabilities),
+		"RABBIT_EXPORTERS":       config.EnabledExporters,
+		"CAFILE":                 config.CAFile,
+		"CERTFILE":               config.CertFile,
+		"KEYFILE":                config.KeyFile,
+		"SKIPVERIFY":             config.InsecureSkipVerify,
+		"EXCLUDE_METRICS":        config.ExcludeMetrics,
+		"SKIP_EXCHANGES":         config.SkipExchanges.String(),
+		"INCLUDE_EXCHANGES":      config.IncludeExchanges.String(),
+		"SKIP_QUEUES":            config.SkipQueues.String(),
+		"INCLUDE_QUEUES":         config.IncludeQueues.String(),
+		"SKIP_VHOST":             config.SkipVHost.String(),
+		"INCLUDE_VHOST":          config.IncludeVHost.String(),
+		"RABBIT_TIMEOUT":         config.Timeout,
+		"MAX_QUEUES":             config.MaxQueues,
+		"RABBIT_SCRAPE_INTERVAL": config.ScrapeInterval,
 		//		"RABBIT_PASSWORD": config.RABBIT_PASSWORD,
 	}).Info("Active Configuration")
+
+	if config.ScrapeInterval > 0 && config.ScrapeInterval < config.Timeout {
+		log.WithFields(log.Fields{
+			"RABBIT_SCRAPE_INTERVAL": config.ScrapeInterval,
+			"RABBIT_TIMEOUT":         config.Timeout,
+		}).Warn("RABBIT_SCRAPE_INTERVAL is lower than RABBIT_TIMEOUT; RabbitMQ scrapes may run longer than the configured minimum interval")
+	}
 
 	handler := http.NewServeMux()
 	handler.Handle("/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}))

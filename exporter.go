@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -24,7 +26,7 @@ const (
 	totalQueues            contextValues = "totalQueues"
 )
 
-//RegisterExporter makes an exporter available by the provided name.
+// RegisterExporter makes an exporter available by the provided name.
 func RegisterExporter(name string, f func() Exporter) {
 	exportersMu.Lock()
 	defer exportersMu.Unlock()
@@ -42,9 +44,34 @@ type exporter struct {
 	exporter                     map[string]Exporter
 	overviewExporter             *exporterOverview
 	lastScrapeOK                 bool
+	lastScrapeStartedAt          time.Time
+	cachedMetrics                []prometheus.Metric
 }
 
-//Exporter interface for prometheus metrics. Collect is fetching the data and therefore can return an error
+type cachedMetric struct {
+	desc   *prometheus.Desc
+	metric *dto.Metric
+}
+
+func newCachedMetric(m prometheus.Metric) (prometheus.Metric, error) {
+	metric := &dto.Metric{}
+	if err := m.Write(metric); err != nil {
+		return nil, err
+	}
+	return cachedMetric{desc: m.Desc(), metric: proto.Clone(metric).(*dto.Metric)}, nil
+}
+
+func (m cachedMetric) Desc() *prometheus.Desc {
+	return m.desc
+}
+
+func (m cachedMetric) Write(metric *dto.Metric) error {
+	proto.Reset(metric)
+	proto.Merge(metric, m.metric)
+	return nil
+}
+
+// Exporter interface for prometheus metrics. Collect is fetching the data and therefore can return an error
 type Exporter interface {
 	Collect(ctx context.Context, ch chan<- prometheus.Metric) error
 	Describe(ch chan<- *prometheus.Desc)
@@ -90,6 +117,45 @@ func (e *exporter) Describe(ch chan<- *prometheus.Desc) {
 func (e *exporter) Collect(ch chan<- prometheus.Metric) {
 	e.mutex.Lock() // To protect metrics from concurrent collects.
 	defer e.mutex.Unlock()
+
+	if e.useCachedMetrics() {
+		e.collectCachedMetrics(ch)
+		return
+	}
+
+	metrics := make(chan prometheus.Metric)
+	var collected []prometheus.Metric
+	scrapeStartedAt := time.Now()
+	go func() {
+		defer close(metrics)
+		e.collectFreshMetrics(metrics)
+	}()
+
+	for metric := range metrics {
+		ch <- metric
+		if cached, err := newCachedMetric(metric); err == nil {
+			collected = append(collected, cached)
+		} else {
+			log.WithError(err).Warn("caching metric failed")
+		}
+	}
+
+	e.cachedMetrics = collected
+	e.lastScrapeStartedAt = scrapeStartedAt
+
+}
+
+func (e *exporter) useCachedMetrics() bool {
+	return config.ScrapeInterval > 0 && len(e.cachedMetrics) > 0 && time.Since(e.lastScrapeStartedAt) < time.Duration(config.ScrapeInterval)*time.Second
+}
+
+func (e *exporter) collectCachedMetrics(ch chan<- prometheus.Metric) {
+	for _, metric := range e.cachedMetrics {
+		ch <- metric
+	}
+}
+
+func (e *exporter) collectFreshMetrics(ch chan<- prometheus.Metric) {
 
 	e.upMetric.Reset()
 	e.endpointUpMetric.Reset()
