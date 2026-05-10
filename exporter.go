@@ -6,9 +6,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -45,30 +43,6 @@ type exporter struct {
 	overviewExporter             *exporterOverview
 	lastScrapeOK                 bool
 	lastScrapeStartedAt          time.Time
-	cachedMetrics                []prometheus.Metric
-}
-
-type cachedMetric struct {
-	desc   *prometheus.Desc
-	metric *dto.Metric
-}
-
-func newCachedMetric(m prometheus.Metric) (prometheus.Metric, error) {
-	metric := &dto.Metric{}
-	if err := m.Write(metric); err != nil {
-		return nil, err
-	}
-	return cachedMetric{desc: m.Desc(), metric: proto.Clone(metric).(*dto.Metric)}, nil
-}
-
-func (m cachedMetric) Desc() *prometheus.Desc {
-	return m.desc
-}
-
-func (m cachedMetric) Write(metric *dto.Metric) error {
-	proto.Reset(metric)
-	proto.Merge(metric, m.metric)
-	return nil
 }
 
 // Exporter interface for prometheus metrics. Collect is fetching the data and therefore can return an error
@@ -119,74 +93,56 @@ func (e *exporter) Collect(ch chan<- prometheus.Metric) {
 	defer e.mutex.Unlock()
 
 	if e.useCachedMetrics() {
-		e.collectCachedMetrics(ch)
+		e.collectFreshMetrics(ch, false)
 		return
 	}
 
-	metrics := make(chan prometheus.Metric)
-	var collected []prometheus.Metric
 	scrapeStartedAt := time.Now()
-	go func() {
-		defer close(metrics)
-		e.collectFreshMetrics(metrics)
-	}()
-
-	for metric := range metrics {
-		ch <- metric
-		if cached, err := newCachedMetric(metric); err == nil {
-			collected = append(collected, cached)
-		} else {
-			log.WithError(err).Warn("caching metric failed")
-		}
-	}
-
-	e.cachedMetrics = collected
+	e.collectFreshMetrics(ch, true)
 	e.lastScrapeStartedAt = scrapeStartedAt
 
 }
 
 func (e *exporter) useCachedMetrics() bool {
-	return config.ScrapeInterval > 0 && len(e.cachedMetrics) > 0 && time.Since(e.lastScrapeStartedAt) < time.Duration(config.ScrapeInterval)*time.Second
+	return config.ScrapeInterval > 0 && !e.lastScrapeStartedAt.IsZero() && time.Since(e.lastScrapeStartedAt) < time.Duration(config.ScrapeInterval)*time.Second
 }
 
-func (e *exporter) collectCachedMetrics(ch chan<- prometheus.Metric) {
-	for _, metric := range e.cachedMetrics {
-		ch <- metric
+func (e *exporter) collectFreshMetrics(ch chan<- prometheus.Metric, scrapeRabbitMQ bool) {
+
+	if scrapeRabbitMQ {
+		e.upMetric.Reset()
+		e.endpointUpMetric.Reset()
+		e.endpointScrapeDurationMetric.Reset()
 	}
-}
-
-func (e *exporter) collectFreshMetrics(ch chan<- prometheus.Metric) {
-
-	e.upMetric.Reset()
-	e.endpointUpMetric.Reset()
-	e.endpointScrapeDurationMetric.Reset()
 
 	start := time.Now()
-	allUp := true
+	if scrapeRabbitMQ {
+		allUp := true
 
-	if err := e.collectWithDuration(e.overviewExporter, "overview", ch); err != nil {
-		log.WithError(err).Warn("retrieving overview failed")
-		allUp = false
-	}
-
-	for name, ex := range e.exporter {
-		if err := e.collectWithDuration(ex, name, ch); err != nil {
-			log.WithError(err).Warn("retrieving " + name + " failed")
+		if err := e.collectWithDuration(e.overviewExporter, "overview", ch); err != nil {
+			log.WithError(err).Warn("retrieving overview failed")
 			allUp = false
+		}
+
+		for name, ex := range e.exporter {
+			if err := e.collectWithDuration(ex, name, ch); err != nil {
+				log.WithError(err).Warn("retrieving " + name + " failed")
+				allUp = false
+			}
+		}
+
+		if allUp {
+			e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(1)
+		} else {
+			e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(0)
+		}
+		e.lastScrapeOK = allUp
+
+		if e.overviewExporter.NodeInfo().ClusterName != "" && e.overviewExporter.NodeInfo().Node != "" {
+			e.upMetric.DeleteLabelValues("", "")
 		}
 	}
 	BuildInfo.Collect(ch)
-
-	if allUp {
-		e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(1)
-	} else {
-		e.upMetric.WithLabelValues(e.overviewExporter.NodeInfo().ClusterName, e.overviewExporter.NodeInfo().Node).Set(0)
-	}
-	e.lastScrapeOK = allUp
-
-	if e.overviewExporter.NodeInfo().ClusterName != "" && e.overviewExporter.NodeInfo().Node != "" {
-		e.upMetric.DeleteLabelValues("", "")
-	}
 
 	e.upMetric.Collect(ch)
 	e.endpointUpMetric.Collect(ch)

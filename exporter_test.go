@@ -113,9 +113,6 @@ func TestScrapeIntervalStartsWhenScrapeStarts(t *testing.T) {
 	config.ScrapeInterval = 30
 
 	exporter := newExporter()
-	exporter.cachedMetrics = []prometheus.Metric{
-		prometheus.MustNewConstMetric(prometheus.NewDesc("rabbitmq_test_metric", "test metric", nil, nil), prometheus.GaugeValue, 1),
-	}
 	exporter.lastScrapeStartedAt = time.Now().Add(-29 * time.Second)
 
 	if !exporter.useCachedMetrics() {

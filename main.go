@@ -93,7 +93,15 @@ func main() {
 	}
 
 	handler := http.NewServeMux()
-	handler.Handle("/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}))
+	metricsHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
+	handler.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		log.WithFields(log.Fields{
+			"remote_addr": r.RemoteAddr,
+			"method":      r.Method,
+			"user_agent":  r.UserAgent(),
+		}).Info("Metrics endpoint requested")
+		metricsHandler.ServeHTTP(w, r)
+	})
 	handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`<html>
              <head><title>RabbitMQ Exporter</title></head>
